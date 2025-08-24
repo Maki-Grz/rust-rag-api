@@ -37,3 +37,6 @@ All responses are based strictly on the ingested documentation.
 - Support for updating or deleting passages
 - Optimized passage selection for long documents
 - Integration with more powerful language models
+
+Note: This project is still in development.
+Some functionnality (docs, structure) may be developed with the help of AI-assisted development tools, but the majority of the code is written by hand.
