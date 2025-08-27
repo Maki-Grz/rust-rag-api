@@ -1,79 +1,60 @@
-use crate::types::Passage;
-use crate::utils::{compute_hash, sigmoid};
-use actix_web::web;
+use crate::types::{Metadata, Passage};
+use crate::utils::compute_hash;
 use mongodb::bson::doc;
 use mongodb::Client;
-use std::cmp::min;
 
-pub fn segment_text(text: &str) -> Vec<Passage> {
+pub fn segment_text(
+    text: &str,
+    metadata: Option<Metadata>,
+    passage_size: usize,
+    step: usize,
+) -> Vec<Passage> {
     let words: Vec<&str> = text.split_whitespace().collect();
-    let passage_size = 300;
-    let step = 250;
-
-    let mut passages: Vec<Passage> = Vec::new();
+    let mut passages = Vec::new();
     let mut start = 0;
-    while start < words.len() {
-        let end = min(start + passage_size, words.len());
-        let slice = &words[start..end];
-        let text = slice.join(" ");
 
-        let passage_struct = Passage {
+    while start < words.len() {
+        let end = usize::min(start + passage_size, words.len());
+        let slice = &words[start..end];
+        let passage_text = slice.join(" ");
+
+        let passage = Passage {
             id: uuid::Uuid::new_v4().to_string(),
-            text: text.to_string(),
+            text: passage_text,
             embedding: vec![],
-            metadata: None,
+            metadata: metadata.clone(),
             hash: None,
         };
 
-        passages.push(passage_struct);
+        passages.push(passage);
         start += step;
     }
 
     passages
 }
 
-pub fn compute_embedding(passage: &Passage) -> Vec<f32> {
-    const EMBEDDING_SIZE: usize = 128;
-    let words: Vec<&str> = passage.text.split_whitespace().collect();
-    let mut embedding: Vec<f32> = vec![0.0; EMBEDDING_SIZE];
-
-    let mut temp_embedding: Vec<f32> = Vec::new();
-    for word in words {
-        let c = word.chars().next().unwrap_or(' ') as u8;
-        temp_embedding.push(sigmoid(c as f32));
-    }
-
-    let len = min(temp_embedding.len(), EMBEDDING_SIZE);
-    embedding[..len].copy_from_slice(&temp_embedding[..len]);
-
-    if embedding.len() > EMBEDDING_SIZE {
-        embedding.truncate(EMBEDDING_SIZE);
-    } else {
-        embedding.resize(EMBEDDING_SIZE, 0.0);
-    }
-
-    embedding
-}
-
 pub async fn store_passage(
     mut passage: Passage,
-    client: &web::Data<Client>,
+    client: &Client,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let hash = compute_hash(&passage.text);
 
+    let database = std::env::var("DATABASE").expect("Set env variable DATABASE first!");
+    let collection = std::env::var("COLLECTION").expect("Set env variable COLLECTION first!");
+
     let docs_collection = client
-        .database("test")
-        .collection::<Passage>("paladium-wiki");
+        .database(database.as_str())
+        .collection::<Passage>(collection.as_str());
+
     let existing = docs_collection
         .find_one(doc! { "hash": hash as i64 })
         .await?;
 
-    if existing.is_some() {
-        return Ok(existing.unwrap().id);
+    if let Some(existing_passage) = existing {
+        return Ok(existing_passage.id);
     }
 
-    passage.hash = Option::from(hash as i64);
-
+    passage.hash = Some(hash as i64);
     docs_collection.insert_one(&passage).await?;
 
     Ok(passage.id.clone())
