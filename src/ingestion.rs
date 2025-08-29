@@ -3,31 +3,57 @@ use crate::utils::compute_hash;
 use mongodb::bson::doc;
 use mongodb::Client;
 
-pub fn segment_text(
-    text: &str,
-    metadata: Option<Metadata>,
-    passage_size: usize,
-    step: usize,
-) -> Vec<Passage> {
-    let words: Vec<&str> = text.split_whitespace().collect();
+pub fn segment_text(text: &str, metadata: Option<Metadata>) -> Vec<Passage> {
+    let max_words = 400;
+    let overlap = 60;
+
     let mut passages = Vec::new();
-    let mut start = 0;
 
-    while start < words.len() {
-        let end = usize::min(start + passage_size, words.len());
-        let slice = &words[start..end];
-        let passage_text = slice.join(" ");
+    let paragraphs: Vec<&str> = text
+        .split("\n\n")
+        .filter(|p| !p.trim().is_empty())
+        .collect();
 
-        let passage = Passage {
-            id: uuid::Uuid::new_v4().to_string(),
-            text: passage_text,
-            embedding: vec![],
-            metadata: metadata.clone(),
-            hash: None,
-        };
+    for paragraph in paragraphs {
+        let sentences: Vec<&str> = paragraph
+            .split_terminator(|c| c == '.' || c == '!' || c == '?')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
 
-        passages.push(passage);
-        start += step;
+        let mut start = 0;
+        while start < sentences.len() {
+            let mut passage_words = Vec::new();
+            let mut end = start;
+
+            while end < sentences.len() {
+                let sentence_words: Vec<&str> = sentences[end].split_whitespace().collect();
+                if passage_words.len() + sentence_words.len() > max_words {
+                    break;
+                }
+                passage_words.extend(sentence_words);
+                end += 1;
+            }
+
+            if !passage_words.is_empty() {
+                let passage_text = passage_words.join(" ");
+                let passage = Passage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    text: passage_text,
+                    embedding: vec![],
+                    metadata: metadata.clone(),
+                    hash: None,
+                };
+                passages.push(passage);
+            }
+
+            let step = if overlap >= passage_words.len() {
+                1
+            } else {
+                passage_words.len() - overlap
+            };
+            start += step;
+        }
     }
 
     passages

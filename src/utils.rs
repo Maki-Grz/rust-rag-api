@@ -29,8 +29,8 @@ pub fn load_bert_model_and_tokenizer(device: &Device) -> Result<(BertModel, Toke
     use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
     use hf_hub::{api::sync::Api, Repo, RepoType};
 
-    let model_id = "sentence-transformers/all-MiniLM-L6-v2";
-    let revision = "refs/pr/21";
+    let model_id = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2";
+    let revision = "main";
 
     let repo = Repo::with_revision(model_id.to_string(), RepoType::Model, revision.parse()?);
     let api = Api::new()?.repo(repo);

@@ -23,7 +23,7 @@ pub async fn ingest(
     client: web::Data<Client>,
     req: web::Json<IngestRequest>,
 ) -> impl Responder {
-    let passages = segment_text(&req.text, req.metadata.clone(), 200, 150);
+    let passages = segment_text(&req.text, req.metadata.clone());
 
     let tasks = FuturesUnordered::new();
     let model = Arc::new(&state.model);
