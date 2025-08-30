@@ -3,10 +3,10 @@ use mongodb::bson::doc;
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_a = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b = b.iter().map(|x| x * x).sum::<f32>().sqrt();
 
-    if norm_a == 0.0 || norm_b == 0.0 {
+    if norm_a < f32::EPSILON || norm_b < f32::EPSILON {
         0.0
     } else {
         dot_product / (norm_a * norm_b)
@@ -17,12 +17,12 @@ pub async fn search_top_k(
     question_embedding: &[f32],
     k: usize,
     client: &mongodb::Client,
+    db_name: &str,
+    collection_name: &str,
 ) -> Result<Vec<Passage>, Box<dyn std::error::Error>> {
-    let database = std::env::var("DATABASE").expect("Set env variable DATABASE first!");
-    let collection = std::env::var("COLLECTION").expect("Set env variable COLLECTION first!");
     let docs_collection = client
-        .database(database.as_str())
-        .collection::<Passage>(collection.as_str());
+        .database(db_name)
+        .collection::<Passage>(collection_name);
 
     let mut cursor = docs_collection.find(doc! {}).await?;
     let mut scored_passages = Vec::new();

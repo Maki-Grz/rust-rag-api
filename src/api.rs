@@ -3,27 +3,26 @@ use crate::ingestion::{segment_text, store_passage};
 use crate::retrieval::search_top_k;
 use crate::types::{AnswerResponse, IngestRequest, IngestResponse, Passage, QuestionRequest};
 use crate::utils::compute_text_embedding;
+use crate::AppState;
 use actix_web::{post, web, HttpResponse, Responder};
-use candle_core::Device;
-use candle_transformers::models::bert::BertModel;
 use futures::stream::{FuturesUnordered, StreamExt};
-use mongodb::Client;
 use std::sync::Arc;
-use tokenizers::Tokenizer;
-
-pub struct AppState {
-    pub model: BertModel,
-    pub tokenizer: Tokenizer,
-    pub device: Device,
-}
 
 #[post("/ingest")]
-pub async fn ingest(
-    state: web::Data<AppState>,
-    client: web::Data<Client>,
-    req: web::Json<IngestRequest>,
-) -> impl Responder {
-    let passages = segment_text(&req.text, req.metadata.clone());
+pub async fn ingest(state: web::Data<AppState>, req: web::Json<IngestRequest>) -> impl Responder {
+    let db_name = &state.config.database_name;
+    let collection_name = &state.config.collection_name;
+    let client = &state.db_client;
+
+    if req.text.len() > 1_000_000 {
+        return HttpResponse::BadRequest().json("Texte trop volumineux");
+    }
+
+    if req.text.trim().is_empty() {
+        return HttpResponse::BadRequest().json("Texte vide");
+    }
+
+    let passages = segment_text(&req.text, req.metadata.clone(), &state.tokenizer);
 
     let tasks = FuturesUnordered::new();
     let model = Arc::new(&state.model);
@@ -38,14 +37,24 @@ pub async fn ingest(
         let client = Arc::clone(&client_arc);
 
         tasks.push(async move {
-            let embedding = compute_text_embedding(&model, &tokenizer, &device, &p.text)
-                .await
-                .ok()?;
+            let embedding = match compute_text_embedding(&model, &tokenizer, &device, &p.text).await
+            {
+                Ok(emb) => emb,
+                Err(e) => {
+                    eprintln!(
+                        "Impossible de calculer l'embedding pour le passage {}: {}",
+                        p.id, e
+                    );
+                    return None;
+                }
+            };
 
             let vec2 = embedding.to_vec2().ok()?;
             p.embedding = vec2[0].clone();
 
-            store_passage(p, &client).await.ok()
+            store_passage(p, &client, db_name, collection_name)
+                .await
+                .ok()
         });
     }
 
@@ -63,11 +72,11 @@ pub async fn ingest(
 }
 
 #[post("/ask")]
-pub async fn ask(
-    state: web::Data<AppState>,
-    client: web::Data<Client>,
-    req: web::Json<QuestionRequest>,
-) -> impl Responder {
+pub async fn ask(state: web::Data<AppState>, req: web::Json<QuestionRequest>) -> impl Responder {
+    let db_name = &state.config.database_name;
+    let collection_name = &state.config.collection_name;
+    let client = &state.db_client;
+
     let question_embedding_tensor =
         match compute_text_embedding(&state.model, &state.tokenizer, &state.device, &req.question)
             .await
@@ -87,7 +96,7 @@ pub async fn ask(
         }
     };
 
-    match search_top_k(&question_embedding, 3, &client).await {
+    match search_top_k(&question_embedding, 3, client, db_name, collection_name).await {
         Ok(top_passages_with_scores) => {
             if top_passages_with_scores.is_empty() {
                 return HttpResponse::Ok().json(AnswerResponse {
