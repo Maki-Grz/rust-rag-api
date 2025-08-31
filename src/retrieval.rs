@@ -1,5 +1,7 @@
 use crate::types::Passage;
 use mongodb::bson::doc;
+use mongodb::options::FindOptions;
+use rayon::prelude::*;
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
@@ -19,36 +21,55 @@ pub async fn search_top_k(
     client: &mongodb::Client,
     db_name: &str,
     collection_name: &str,
+    fetch_limit: Option<i64>,
 ) -> Result<Vec<Passage>, Box<dyn std::error::Error>> {
     let docs_collection = client
         .database(db_name)
         .collection::<Passage>(collection_name);
 
-    let mut cursor = docs_collection.find(doc! {}).await?;
-    let mut scored_passages = Vec::new();
+    let find_opts = FindOptions::builder()
+        .projection(doc! {
+            "text": 1,
+            "embedding": 1,
+            "metadata": 1,
+        })
+        .limit(fetch_limit.unwrap_or(2000))
+        .build();
+
+    let mut cursor = docs_collection
+        .find(doc! {})
+        .with_options(find_opts)
+        .await?;
+    let mut passages = Vec::new();
 
     use futures::TryStreamExt;
-
-    while let Some(passage) = cursor.try_next().await? {
-        if !passage.embedding.is_empty() {
-            let similarity = cosine_similarity(question_embedding, &passage.embedding);
-            scored_passages.push((passage, similarity));
+    while let Some(p) = cursor.try_next().await? {
+        if !p.embedding.is_empty() {
+            passages.push(p);
         }
     }
 
-    scored_passages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let threshold = scored_passages
-        .first()
-        .map(|(_, sim)| *sim * 0.95)
-        .unwrap_or(0.0);
-
-    let top_candidates: Vec<_> = scored_passages
-        .into_iter()
-        .filter(|(_, sim)| *sim >= threshold)
+    let mut scored_passages: Vec<_> = passages
+        .par_iter()
+        .map(|p| {
+            let sim = cosine_similarity(question_embedding, &p.embedding);
+            (p.clone(), sim)
+        })
         .collect();
 
-    let top_passages: Vec<Passage> = top_candidates.into_iter().take(k).map(|(p, _)| p).collect();
+    scored_passages
+        .sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let best_score = scored_passages.first().map(|(_, s)| *s).unwrap_or(0.0);
+    let min_threshold = 0.75;
+    let threshold = best_score.max(min_threshold * best_score);
+
+    let top_passages: Vec<Passage> = scored_passages
+        .into_iter()
+        .filter(|(_, sim)| *sim >= threshold)
+        .take(k)
+        .map(|(p, _)| p)
+        .collect();
 
     Ok(top_passages)
 }

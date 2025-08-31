@@ -1,5 +1,5 @@
-use anyhow::Error as E;
-use candle_core::{Device, Tensor};
+use anyhow::{anyhow, Error as E, Result};
+use candle_core::{DType, Device, Tensor};
 use candle_transformers::models::bert::BertModel;
 use tokenizers::Tokenizer;
 use twox_hash::XxHash3_64;
@@ -9,19 +9,41 @@ pub async fn compute_text_embedding(
     tokenizer: &Tokenizer,
     device: &Device,
     text: &str,
-) -> anyhow::Result<Tensor> {
-    let encoding = tokenizer.encode(text, true).map_err(E::msg)?;
-    let mut tokens_padded = encoding.get_ids().to_vec();
-    tokens_padded.resize(512, 0);
+) -> Result<Tensor> {
+    let encoding = tokenizer.encode(text, true).map_err(|e| anyhow!(e))?;
+    let ids = encoding.get_ids().to_vec();
+    let mask = encoding.get_attention_mask().to_vec();
 
-    let token_ids_tensor = Tensor::new(&*tokens_padded, device)?.unsqueeze(0)?;
-    let token_type_ids = token_ids_tensor.zeros_like()?;
-    let embeddings = model.forward(&token_ids_tensor, &token_type_ids, None)?;
+    let ids_tensor = Tensor::new(&*ids, device)?.unsqueeze(0)?;
+    let mask_tensor = Tensor::new(&*mask, device)?.unsqueeze(0)?;
 
-    let (_batch, n_tokens, _hidden) = embeddings.dims3()?;
-    let pooled = (embeddings.sum(1)? / (n_tokens as f64))?;
+    let output = model.forward(&ids_tensor, &mask_tensor, None)?;
 
-    Ok(pooled.broadcast_div(&pooled.sqr()?.sum_keepdim(1)?.sqrt()?)?)
+    let mask_f = mask_tensor.to_dtype(DType::F32)?;
+    let mask_sum = mask_f.sum_all()?.to_scalar::<f32>()?;
+
+    let mask_3d = mask_f.unsqueeze(2)?;
+    let masked_hidden = output.broadcast_mul(&mask_3d)?;
+    let summed = masked_hidden.sum(1)?;
+    let mask_sum_tensor = Tensor::new(mask_sum, device)?.unsqueeze(0)?.unsqueeze(1)?;
+
+    let shape = summed.shape();
+    let hidden_size = shape.dims()[1];
+    let mask_sum_expanded = mask_sum_tensor.expand(&[1, hidden_size])?;
+    let mean_pooled = &summed / &mask_sum_expanded;
+
+    let mean_pooled = mean_pooled?;
+    let norm = mean_pooled
+        .clone()
+        .powf(2.0)?
+        .sum_all()?
+        .to_scalar::<f32>()?
+        .sqrt();
+    let norm_tensor = Tensor::new(norm, device)?.unsqueeze(0)?.unsqueeze(1)?;
+    let norm_expanded = norm_tensor.expand(&[1, hidden_size])?;
+    let normalized = &mean_pooled / &norm_expanded;
+
+    Ok(normalized?)
 }
 
 pub fn load_bert_model_and_tokenizer(device: &Device) -> Result<(BertModel, Tokenizer), E> {

@@ -1,10 +1,9 @@
 use crate::types::{Metadata, Passage};
 use crate::utils::compute_hash;
-use mongodb::bson::doc;
+use mongodb::bson::{doc, Bson};
 use mongodb::Client;
 use regex::Regex;
 use tokenizers::Tokenizer;
-use uuid::Uuid;
 
 fn count_tokens(tokenizer: &Tokenizer, text: &str) -> usize {
     tokenizer.encode(text, true).unwrap().len()
@@ -43,7 +42,7 @@ fn split_sections(text: &str) -> Vec<String> {
 
 fn make_passage(text: &str, metadata: &Option<Metadata>) -> Passage {
     Passage {
-        id: Uuid::new_v4().to_string(),
+        id: None,
         text: text.to_string(),
         embedding: vec![],
         metadata: metadata.clone(),
@@ -51,13 +50,48 @@ fn make_passage(text: &str, metadata: &Option<Metadata>) -> Passage {
     }
 }
 
+fn clean_text(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn split_sentences(text: &str) -> Vec<String> {
+    let re = Regex::new(r"(?m)([^?\n]+\?[^?\n]*)").unwrap();
+    let mut sentences = Vec::new();
+    let mut last_index = 0;
+
+    for mat in re.find_iter(text) {
+        let sentence = text[last_index..mat.end()].trim();
+        if !sentence.is_empty() {
+            sentences.push(sentence.to_string());
+        }
+        last_index = mat.end();
+    }
+
+    if last_index < text.len() {
+        let rest = text[last_index..].trim();
+        if !rest.is_empty() {
+            sentences.push(rest.to_string());
+        }
+    }
+
+    sentences
+}
+
 pub fn segment_text(text: &str, metadata: Option<Metadata>, tokenizer: &Tokenizer) -> Vec<Passage> {
     let max_tokens = 512;
     let overlap_tokens = 50;
+    let min_tokens = 50;
+
+    let text = clean_text(text);
+    let sections = split_sections(&text);
 
     let mut passages = Vec::new();
-
-    let sections = split_sections(text);
 
     for section in sections {
         let paragraphs: Vec<&str> = section
@@ -66,7 +100,7 @@ pub fn segment_text(text: &str, metadata: Option<Metadata>, tokenizer: &Tokenize
             .collect();
 
         for paragraph in paragraphs {
-            let sentences = split_sections(paragraph);
+            let sentences = split_sentences(paragraph);
 
             let mut buffer = String::new();
             let mut token_count = 0;
@@ -75,12 +109,17 @@ pub fn segment_text(text: &str, metadata: Option<Metadata>, tokenizer: &Tokenize
                 let sentence_tokens = count_tokens(tokenizer, &sentence);
 
                 if token_count + sentence_tokens > max_tokens {
-                    if !buffer.is_empty() {
+                    if token_count >= min_tokens {
                         passages.push(make_passage(&buffer, &metadata));
                     }
 
+                    // Take overlap respecting sentences
                     let overlap_text = keep_last_tokens(tokenizer, &buffer, overlap_tokens);
-                    buffer = format!("{} {}", overlap_text, sentence);
+                    buffer = if overlap_text.is_empty() {
+                        sentence.clone()
+                    } else {
+                        format!("{} {}", overlap_text, sentence)
+                    };
                     token_count = count_tokens(tokenizer, &buffer);
                 } else {
                     if !buffer.is_empty() {
@@ -91,7 +130,7 @@ pub fn segment_text(text: &str, metadata: Option<Metadata>, tokenizer: &Tokenize
                 }
             }
 
-            if !buffer.is_empty() {
+            if !buffer.is_empty() && token_count >= min_tokens {
                 passages.push(make_passage(&buffer, &metadata));
             }
         }
@@ -112,16 +151,22 @@ pub async fn store_passage(
         .database(db_name)
         .collection::<Passage>(collection_name);
 
-    let existing = docs_collection
+    if let Some(existing_passage) = docs_collection
         .find_one(doc! { "hash": hash as i64 })
-        .await?;
-
-    if let Some(existing_passage) = existing {
-        return Ok(existing_passage.id);
+        .await?
+    {
+        return Ok(existing_passage.id.unwrap().to_string());
     }
 
     passage.hash = Some(hash as i64);
-    docs_collection.insert_one(&passage).await?;
 
-    Ok(passage.id.clone())
+    let insert_result = docs_collection.insert_one(&passage).await?;
+
+    let id_str = match insert_result.inserted_id {
+        Bson::ObjectId(oid) => oid.to_string(),
+        Bson::String(s) => s,
+        other => return Err(format!("Unexpected inserted_id type: {:?}", other).into()),
+    };
+
+    Ok(id_str)
 }

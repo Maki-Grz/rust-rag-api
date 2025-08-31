@@ -3,7 +3,8 @@ use anyhow::Result;
 use candle_core::Device;
 use candle_transformers::models::bert::BertModel;
 use mongodb::bson::doc;
-use mongodb::{Client, IndexModel};
+use mongodb::options::Compressor;
+use mongodb::{options::ClientOptions, Client, IndexModel};
 use tokenizers::Tokenizer;
 
 mod api;
@@ -40,22 +41,35 @@ async fn main() -> Result<()> {
     };
 
     unsafe {
-        std::env::set_var("RUST_LOG", "debug,actix_web=debug");
+        std::env::set_var("RUST_LOG", "info,actix_web=info");
     }
     tracing_subscriber::fmt::init();
 
     let device = Device::Cpu;
     let (model, tokenizer) = load_bert_model_and_tokenizer(&device)?;
 
-    let db_client = Client::with_uri_str(&config.cosmos_uri).await?;
+    let mut client_opts = ClientOptions::parse(&config.cosmos_uri).await?;
+    client_opts.compressors = Some(vec![Compressor::Zstd { level: Some(1) }]);
+    client_opts.max_pool_size = Some(128);
+    client_opts.min_pool_size = Some(16);
+    client_opts.server_selection_timeout = Some(std::time::Duration::from_secs(2));
+    client_opts.app_name = Some("rag-api".into());
 
-    let index = IndexModel::builder().keys(doc! { "hash": 1 }).build();
-    db_client
-        .clone()
+    let db_client = Client::with_options(client_opts)?;
+
+    let coll = db_client
         .database(config.database_name.as_str())
-        .collection::<Passage>(config.collection_name.as_str())
-        .create_index(index)
-        .await?;
+        .collection::<Passage>(config.collection_name.as_str());
+
+    let index = IndexModel::builder()
+        .keys(doc! { "hash": 1 })
+        .options(Some(
+            mongodb::options::IndexOptions::builder()
+                .unique(true)
+                .build(),
+        ))
+        .build();
+    coll.create_index(index).await?;
 
     let app_state = web::Data::new(AppState {
         model,

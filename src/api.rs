@@ -42,8 +42,8 @@ pub async fn ingest(state: web::Data<AppState>, req: web::Json<IngestRequest>) -
                 Ok(emb) => emb,
                 Err(e) => {
                     eprintln!(
-                        "Impossible de calculer l'embedding pour le passage {}: {}",
-                        p.id, e
+                        "Impossible de calculer l'embedding pour le passage {:?}: {}",
+                        &p.id, e
                     );
                     return None;
                 }
@@ -96,7 +96,16 @@ pub async fn ask(state: web::Data<AppState>, req: web::Json<QuestionRequest>) ->
         }
     };
 
-    match search_top_k(&question_embedding, 3, client, db_name, collection_name).await {
+    match search_top_k(
+        &question_embedding,
+        3,
+        client,
+        db_name,
+        collection_name,
+        Some(2000),
+    )
+    .await
+    {
         Ok(top_passages_with_scores) => {
             if top_passages_with_scores.is_empty() {
                 return HttpResponse::Ok().json(AnswerResponse {
