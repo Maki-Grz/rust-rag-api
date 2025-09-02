@@ -1,7 +1,7 @@
 use crate::generation::generate_answer;
 use crate::ingestion::{segment_text, store_passage};
 use crate::retrieval::search_top_k;
-use crate::types::{AnswerResponse, IngestRequest, IngestResponse, Passage, QuestionRequest};
+use crate::types::{IngestRequest, IngestResponse, QuestionRequest};
 use crate::utils::compute_text_embedding;
 use crate::AppState;
 use actix_web::{post, web, HttpResponse, Responder};
@@ -96,7 +96,7 @@ pub async fn ask(state: web::Data<AppState>, req: web::Json<QuestionRequest>) ->
         }
     };
 
-    match search_top_k(
+    let passages = match search_top_k(
         &question_embedding,
         3,
         client,
@@ -106,37 +106,41 @@ pub async fn ask(state: web::Data<AppState>, req: web::Json<QuestionRequest>) ->
     )
     .await
     {
-        Ok(top_passages_with_scores) => {
-            if top_passages_with_scores.is_empty() {
-                return HttpResponse::Ok().json(AnswerResponse {
-                    answer: None,
-                    passages: None,
-                    fallback_reason: Some(
-                        "Aucun passage pertinent trouvé pour votre question.".to_string(),
-                    ),
-                });
+        Ok(top) => {
+            if top.is_empty() {
+                return HttpResponse::Ok()
+                    .append_header(("Content-Type", "text/event-stream"))
+                    .body("data: {\"error\": \"Aucun passage pertinent trouvé.\"}\n\n");
             }
-
-            let top_passages: Vec<Passage> = top_passages_with_scores.into_iter().collect();
-
-            match generate_answer(&req.question, &top_passages).await {
-                Ok(answer) => HttpResponse::Ok().json(AnswerResponse {
-                    answer: Some(answer),
-                    passages: None,
-                    fallback_reason: None,
-                }),
-                Err(e) => HttpResponse::Ok().json(AnswerResponse {
-                    answer: None,
-                    passages: Some(top_passages),
-                    fallback_reason: Some(format!(
-                        "LLM non disponible ({}). Voici les passages les plus pertinents :",
-                        e
-                    )),
-                }),
-            }
+            top.into_iter().collect::<Vec<_>>()
         }
         Err(e) => {
-            HttpResponse::InternalServerError().json(format!("Erreur lors de la recherche: {}", e))
+            return HttpResponse::InternalServerError()
+                .json(format!("Erreur lors de la recherche: {}", e));
         }
-    }
+    };
+
+    let stream = match generate_answer(&req.question, &passages).await {
+        Ok(s) => s,
+        Err(e) => {
+            return HttpResponse::Ok()
+                .append_header(("Content-Type", "text/event-stream"))
+                .body(format!("data: {{\"error\": \"{}\"}}\n\n", e));
+        }
+    };
+
+    let sse_stream = stream.map(|chunk| match chunk {
+        Ok(text) if text == "[DONE]" => {
+            Ok::<_, actix_web::Error>(web::Bytes::from("data: [DONE]\n\n"))
+        }
+        Ok(text) => Ok::<_, actix_web::Error>(web::Bytes::from(format!("data: {}\n\n", text))),
+        Err(e) => Ok::<_, actix_web::Error>(web::Bytes::from(format!(
+            "data: {{\"error\": \"{}\"}}\n\n",
+            e
+        ))),
+    });
+
+    HttpResponse::Ok()
+        .append_header(("Content-Type", "text/event-stream"))
+        .streaming(sse_stream)
 }

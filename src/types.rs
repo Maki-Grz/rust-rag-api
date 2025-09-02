@@ -62,30 +62,32 @@ pub struct AnswerResponse {
     pub fallback_reason: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct LLMMessage {
-    pub role: String,
-    pub content: String,
-}
-
 #[derive(Serialize, Clone, Debug)]
 pub struct LLMRequest {
     pub model: String,
     pub messages: Vec<LLMMessage>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
+    pub stream: bool,
 }
 
-#[derive(Deserialize, Debug)]
-pub struct LLMResponse {
+#[derive(Debug, serde::Deserialize)]
+pub struct LLMStreamResponse {
     pub choices: Vec<LLMChoice>,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct LLMChoice {
-    pub message: LLMMessage,
+    pub index: usize,
+    pub finish_reason: Option<String>,
+    pub delta: LLMStreamMessage,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LLMStreamMessage {
+    pub content: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LLMMessage {
+    pub role: String,
+    pub content: String,
 }
