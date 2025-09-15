@@ -20,10 +20,10 @@ pub async fn generate_answer(
         .join("\n\n");
 
     let system_prompt = format!(
-        "Vous êtes un assistant qui répond uniquement en utilisant les informations fournies dans les passages ci-dessous. \
+        "Vous êtes un assistant qui répond uniquement en utilisant les informations fournies dans le passage fourni. \
         Ne jamais inventer d'informations ou utiliser vos connaissances générales. \
         Si les passages ne contiennent pas suffisamment d'informations pour répondre à la QUESTION, dites-le clairement.\n\n\
-        Passages disponibles:\n{}",
+        [PASSAGE] :\n{}",
         context_text
     );
 

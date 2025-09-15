@@ -1,3 +1,4 @@
+use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
 use anyhow::Result;
 use candle_core::Device;
@@ -80,7 +81,10 @@ async fn main() -> Result<()> {
     });
 
     HttpServer::new(move || {
+        let cors = Cors::permissive();
+
         App::new()
+            .wrap(cors)
             .app_data(app_state.clone())
             .service(ingest)
             .service(ask)
