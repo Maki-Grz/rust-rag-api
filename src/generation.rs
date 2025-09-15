@@ -11,6 +11,9 @@ pub async fn generate_answer(
     Box<dyn std::error::Error>,
 > {
     let llm_uri = std::env::var("LLM_URI").expect("Set env variable LLM_URI first!");
+    let model_hash = std::env::var("MODEL_HASH").expect("Set env variable MODEL_HASH first!");
+    let system_prompt =
+        std::env::var("SYSTEM_PROMPT").expect("Set env variable SYSTEM_PROMPT first!");
 
     let context_text = context
         .iter()
@@ -20,18 +23,15 @@ pub async fn generate_answer(
         .join("\n\n");
 
     let system_prompt = format!(
-        "Vous êtes un assistant qui répond uniquement en utilisant les informations fournies dans le passage fourni. \
-        Ne jamais inventer d'informations ou utiliser vos connaissances générales. \
-        Si les passages ne contiennent pas suffisamment d'informations pour répondre à la QUESTION, dites-le clairement.\n\n\
+        "{} \n
         [PASSAGE] :\n{}",
-        context_text
+        system_prompt, context_text
     );
 
     let user_prompt = format!("QUESTION: {}\n", question);
 
     let llm_request = LLMRequest {
-        model: "sha256:3454e9abd4d3ef1a4a915c75d58efffc90c87884c9ccfa85dfe6b07faae13530"
-            .to_string(),
+        model: model_hash.to_string(),
         messages: vec![
             LLMMessage {
                 role: "system".to_string(),
