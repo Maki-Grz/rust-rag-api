@@ -24,7 +24,7 @@ pub async fn generate_answer(
 
     let system_prompt = format!(
         "{} \n
-        [PASSAGE] :\n{}",
+        [PASSAGES] :\n{}",
         system_prompt, context_text
     );
 

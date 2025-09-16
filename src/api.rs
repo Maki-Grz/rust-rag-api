@@ -96,13 +96,16 @@ pub async fn ask(state: web::Data<AppState>, req: web::Json<QuestionRequest>) ->
         }
     };
 
+    let top_k = 6;
+    let max_char_limit = Some(800);
+
     let passages = match search_top_k(
         &question_embedding,
-        3,
+        top_k,
         client,
         db_name,
         collection_name,
-        Some(2000),
+        max_char_limit,
     )
     .await
     {

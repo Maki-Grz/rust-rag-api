@@ -60,13 +60,8 @@ pub async fn search_top_k(
     scored_passages
         .sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    let best_score = scored_passages.first().map(|(_, s)| *s).unwrap_or(0.0);
-    let min_threshold = 0.75;
-    let threshold = best_score.max(min_threshold * best_score);
-
     let top_passages: Vec<Passage> = scored_passages
         .into_iter()
-        .filter(|(_, sim)| *sim >= threshold)
         .take(k)
         .map(|(p, _)| p)
         .collect();
